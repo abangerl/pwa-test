@@ -1,4 +1,4 @@
-const CACHE_NAME = "my-pwa-v3";
+const CACHE_NAME = "my-pwa-v4";
 const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -28,38 +28,57 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data?.type !== "schedule-reminder" || !event.ports[0]) return;
+  if (event.data?.type !== "schedule-midnight") return;
 
   const responsePort = event.ports[0];
   event.waitUntil((async () => {
     try {
-      if (typeof TimestampTrigger !== "function") {
-        throw new Error("Notification scheduling is not supported by this browser.");
-      }
-
-      const { scheduledAt, readableTime } = event.data;
-      if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
-        throw new Error("Choose a date and time in the future.");
-      }
-
-      await self.registration.showNotification("Scheduled reminder", {
-        body: `This reminder was scheduled for ${readableTime}.`,
-        showTrigger: new TimestampTrigger(scheduledAt),
-        tag: "scheduled-reminder"
-      });
-      responsePort.postMessage({ ok: true });
+      const readableTime = await scheduleNextMidnight();
+      responsePort?.postMessage({ ok: true, readableTime });
     } catch (error) {
-      responsePort.postMessage({
+      responsePort?.postMessage({
         ok: false,
         error: error instanceof Error
           ? error.message
           : "Could not schedule the reminder."
       });
     } finally {
-      responsePort.close();
+      responsePort?.close();
     }
   })());
 });
+
+async function scheduleNextMidnight() {
+  if (typeof TimestampTrigger !== "function") {
+    throw new Error("Notification scheduling is not supported by this browser.");
+  }
+  if (Notification.permission !== "granted") {
+    throw new Error("Notification permission was not granted.");
+  }
+
+  const now = new Date();
+  const scheduledAt = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1
+  );
+  const readableTime = `${new Date(scheduledAt).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC"
+  })} UTC`;
+
+  await self.registration.showNotification("Daily reminder", {
+    body: `Scheduled for ${readableTime}.`,
+    showTrigger: new TimestampTrigger(scheduledAt),
+    tag: "scheduled-reminder"
+  });
+
+  return readableTime;
+}
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
@@ -75,11 +94,26 @@ self.addEventListener("notificationclick", (event) => {
         clientUrl.pathname.startsWith(scopeUrl.pathname);
     });
 
-    if (appWindow) {
-      await appWindow.focus();
-      return;
+    let targetWindow = appWindow;
+    if (targetWindow) {
+      await targetWindow.focus();
+    } else {
+      targetWindow = await self.clients.openWindow(scopeUrl.href);
     }
 
-    await self.clients.openWindow(scopeUrl.href);
+    try {
+      await scheduleNextMidnight();
+    } catch (error) {
+      if (targetWindow) {
+        targetWindow.postMessage({
+          type: "reminder-scheduling-error",
+          error: error instanceof Error
+            ? error.message
+            : "Could not schedule the next reminder."
+        });
+      } else {
+        console.error(error);
+      }
+    }
   })());
 });

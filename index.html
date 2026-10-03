@@ -34,24 +34,16 @@
       h1 { margin-top: 0; }
       p { line-height: 1.6; }
 
-      form {
-        display: grid;
-        gap: 0.75rem;
-        margin-top: 1.5rem;
-      }
-
-      input, button {
+      button {
         box-sizing: border-box;
         width: 100%;
+        margin-top: 1rem;
         padding: 0.75rem;
-        font: inherit;
-      }
-
-      button {
         border: 0;
         border-radius: 0.5rem;
         background: #2563eb;
         color: white;
+        font: inherit;
         cursor: pointer;
       }
 
@@ -61,86 +53,45 @@
       }
 
       #status { min-height: 1.5em; }
+
+      #unsupported {
+        font-size: clamp(12rem, 45vw, 32rem);
+        font-weight: 900;
+        line-height: 0.8;
+      }
     </style>
   </head>
   <body>
-    <main>
+    <main id="app">
       <h1>My PWA</h1>
-      <p>Schedule a local reminder on a browser that supports notification triggers.</p>
-      <form id="reminder-form">
-        <label for="reminder-time">Reminder date and time</label>
-        <input id="reminder-time" name="reminder-time" type="datetime-local" required>
-        <button id="schedule-button" type="submit">Schedule reminder</button>
-      </form>
+      <p>Get a daily reminder at midnight UTC.</p>
+      <p>Reminders are best-effort and may stop if you do not open the app or tap a notification.</p>
+      <button id="enable-button" type="button">Enable daily reminder</button>
       <p id="status" role="status" aria-live="polite"></p>
     </main>
+    <div id="unsupported" role="img" aria-label="Unsupported" hidden>!?</div>
     <script>
-      const form = document.querySelector("#reminder-form");
-      const timeInput = document.querySelector("#reminder-time");
-      const scheduleButton = document.querySelector("#schedule-button");
+      const app = document.querySelector("#app");
+      const unsupported = document.querySelector("#unsupported");
+      const enableButton = document.querySelector("#enable-button");
       const status = document.querySelector("#status");
       const supported =
-        "serviceWorker" in navigator &&
         window.isSecureContext &&
+        "serviceWorker" in navigator &&
         "Notification" in window &&
         typeof window.TimestampTrigger === "function";
 
-      const toLocalDateTime = (date) => {
-        const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-        return localDate.toISOString().slice(0, 16);
-      };
-
-      timeInput.min = toLocalDateTime(new Date());
-
-      let registrationPromise;
-      if ("serviceWorker" in navigator) {
-        registrationPromise = navigator.serviceWorker
-          .register("./service-worker.js")
-          .then(() => navigator.serviceWorker.ready);
-        registrationPromise.catch(() => {
-          status.textContent = "Could not register the service worker.";
-        });
-      }
-
       if (!supported) {
-        scheduleButton.disabled = true;
-        status.textContent =
-          "Scheduled reminders are not supported by this browser. No reminder was scheduled.";
-      }
+        app.hidden = true;
+        unsupported.hidden = false;
+      } else {
+        unsupported.hidden = true;
 
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const scheduledAt = new Date(timeInput.value).getTime();
-
-        if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
-          status.textContent = "Choose a date and time in the future.";
-          return;
-        }
-
-        scheduleButton.disabled = true;
-        status.textContent = "Scheduling reminder…";
-
-        try {
-          if (!supported) {
-            throw new Error("Scheduled reminders are not supported by this browser.");
-          }
-
-          if (Notification.permission !== "granted") {
-            const permission = await Notification.requestPermission();
-            if (permission !== "granted") {
-              throw new Error("Notification permission was not granted.");
-            }
-          }
-
-          const registration = await registrationPromise;
+        const scheduleNextMidnight = async (registration) => {
           if (!registration.active) {
             throw new Error("The service worker is not active yet. Try again shortly.");
           }
 
-          const readableTime = new Date(scheduledAt).toLocaleString(undefined, {
-            dateStyle: "medium",
-            timeStyle: "short"
-          });
           const channel = new MessageChannel();
           const response = new Promise((resolve, reject) => {
             channel.port1.onmessage = ({ data }) => {
@@ -156,21 +107,61 @@
               reject(new Error("Could not read the service worker response."));
             };
           });
-
           registration.active.postMessage(
-            { type: "schedule-reminder", scheduledAt, readableTime },
+            { type: "schedule-midnight" },
             [channel.port2]
           );
-          await response;
-          status.textContent = `Reminder scheduled for ${readableTime}.`;
-        } catch (error) {
+          const result = await response;
+          return result.readableTime;
+        };
+
+        const registrationPromise = navigator.serviceWorker
+          .register("./service-worker.js")
+          .then(() => navigator.serviceWorker.ready);
+
+        navigator.serviceWorker.addEventListener("message", ({ data }) => {
+          if (data?.type === "reminder-scheduling-error") {
+            status.textContent = data.error;
+          }
+        });
+
+        registrationPromise.then(async (registration) => {
+          if (Notification.permission === "granted") {
+            const readableTime = await scheduleNextMidnight(registration);
+            status.textContent = `Next reminder: ${readableTime}.`;
+          } else {
+            status.textContent = "Enable notifications to schedule the reminder.";
+          }
+        }).catch((error) => {
           status.textContent = error instanceof Error
             ? error.message
-            : "Could not schedule the reminder.";
-        } finally {
-          scheduleButton.disabled = !supported;
-        }
-      });
+            : "Could not prepare the reminder.";
+        });
+
+        enableButton.addEventListener("click", async () => {
+          enableButton.disabled = true;
+          status.textContent = "Enabling daily reminder…";
+
+          try {
+            if (Notification.permission !== "granted") {
+              const permission = await Notification.requestPermission();
+              if (permission !== "granted") {
+                throw new Error("Notification permission was not granted.");
+              }
+            }
+
+            const registration = await registrationPromise;
+            const readableTime = await scheduleNextMidnight(registration);
+            status.textContent = `Next reminder: ${readableTime}.`;
+          } catch (error) {
+            status.textContent = error instanceof Error
+              ? error.message
+              : "Could not schedule the reminder.";
+          } finally {
+            enableButton.disabled = false;
+          }
+        });
+      }
     </script>
   </body>
 </html>
