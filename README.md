@@ -13,3 +13,5 @@ push service is involved. Browser support is limited; unsupported browsers show
 an explanation and do not schedule a fallback timer. The browser must allow
 notifications, and Android notification settings may affect delivery. The
 scheduled notification includes its local date and time for testing.
+Tapping a notification focuses an open app window or opens the app if none is
+already open.

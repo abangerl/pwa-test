@@ -1,4 +1,4 @@
-const CACHE_NAME = "my-pwa-v2";
+const CACHE_NAME = "my-pwa-v3";
 const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -58,5 +58,28 @@ self.addEventListener("message", (event) => {
     } finally {
       responsePort.close();
     }
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const scopeUrl = new URL(self.registration.scope);
+    const windows = await self.clients.matchAll({
+      type: "window",
+      includeUncontrolled: true
+    });
+    const appWindow = windows.find((client) => {
+      const clientUrl = new URL(client.url);
+      return clientUrl.origin === scopeUrl.origin &&
+        clientUrl.pathname.startsWith(scopeUrl.pathname);
+    });
+
+    if (appWindow) {
+      await appWindow.focus();
+      return;
+    }
+
+    await self.clients.openWindow(scopeUrl.href);
   })());
 });
